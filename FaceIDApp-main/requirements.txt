@@ -1,0 +1,152 @@
+To run the generated `.exe` from your PyInstaller command on **a different computer**, here is a complete checklist of **all necessary prerequisites and configuration** for a **non-technical user** (novice):
+
+---
+
+### ✅ Your App’s Features Recap:
+
+* Uses **Kivy** for GUI
+* Uses **OpenCV** for face detection
+* Loads a **TensorFlow** model with a **custom layer (`L1Dist`)**
+* Reads/writes image and config files
+* Runs as a standalone `.exe` using PyInstaller (`--onefile`, `--windowed`)
+
+---
+
+## 🧩 PREREQUISITES ON TARGET MACHINE
+
+### 1. ✅ **Windows OS (64-bit)**
+
+* Your `.exe` will work only on the same architecture as the one it was compiled on. So compile on Windows 64-bit for best compatibility.
+
+---
+
+### 2. ✅ **Visual C++ Redistributable**
+
+Most `.exe`s created with PyInstaller that use packages like TensorFlow, OpenCV, and Kivy require:
+
+🔗 Download and install:
+**Microsoft Visual C++ Redistributable for Visual Studio 2015–2022**
+
+* Link: [https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)
+
+---
+
+### 3. ✅ **Graphics Driver (OpenGL Compatible)**
+
+* Kivy uses **OpenGL**, so the system should have a **GPU driver** installed (Intel, NVIDIA, AMD, etc.).
+* Avoid running on headless systems (i.e., no display server).
+
+---
+
+### 4. ✅ **No Python Installation Required**
+
+* Your app is packaged with Python via PyInstaller (`--onefile`), so the end user **does NOT need to install Python**.
+
+---
+
+### 5. ✅ **Model File (.h5) and Config (.ini) Must Be Present**
+
+Since the `.exe` loads a model and config from:
+
+```python
+os.path.join(self.folder.SAVE_MODEL, self.model_name)
+```
+
+...which resolves to:
+
+```bash
+C:\Users\<username>\AppData\Local\Temp\data\save_model\
+```
+
+You need to **ensure** the following folder structure and files are created **before first run** on the new machine:
+
+```
+%TEMP%\data\
+    ├── save_model\
+    │   └── siamesemodel_latest.h5
+    ├── input_image\
+    ├── verification_image\
+    └── threshold\
+        └── config.ini
+```
+
+#### 📝 You can automate this by:
+
+* Providing a ZIP file or installer that extracts the structure to `%TEMP%/data`
+* Or modify your app to copy default files from the exe folder to `%TEMP%/data` on first run
+
+---
+
+### 6. ✅ **Internet Access Not Required**
+
+* Your app is fully offline.
+
+---
+
+### 7. ✅ **Permissions**
+
+* Ensure the user has permission to access their webcam.
+* Some antivirus software may flag webcam access or unknown executables. Recommend "Run as Administrator" if needed.
+
+---
+
+## 🔒 OPTIONAL: First Run Setup Code (Improvement Idea)
+
+To avoid asking users to manually set up the model and config, you can include this logic in your app:
+
+```python
+def ensure_model_and_config(self):
+    model_path = os.path.join(self.folder.SAVE_MODEL, 'siamesemodel_latest.h5')
+    config_path = os.path.join(self.folder.THRESHOLD, 'config.ini')
+    
+    if not os.path.exists(model_path):
+        shutil.copy(self.resource_path('siamesemodel_latest.h5'), model_path)
+
+    if not os.path.exists(config_path):
+        shutil.copy(self.resource_path('config.ini'), config_path)
+```
+
+And add:
+
+```python
+self.ensure_model_and_config()
+```
+
+in `build()` after folder struct is created.
+
+Then just include `siamesemodel_latest.h5` and `config.ini` via `--add-data` in your PyInstaller command.
+
+---
+
+## 🛠️ FINAL RECOMMENDATION: YOUR PYINSTALLER COMMAND
+
+Add the model and config file to the bundle:
+
+```bash
+pyinstaller --noconfirm --onefile --windowed ^
+--name "AI Face Recognition" ^
+--icon "C:\Users\utsav\Downloads\icon_highres.ico" ^
+--add-data "C:\Users\utsav\Downloads\icon_highres.ico;." ^
+--add-data "C:\Users\utsav\AppData\Roaming\Python\Python310\site-packages\cv2\data\haarcascade_frontalface_default.xml;cv2/data" ^
+--add-data "C:\Users\utsav\model\siamesemodel_latest.h5;." ^
+--add-data "C:\Users\utsav\model\config.ini;." ^
+"C:\Users\utsav\Downloads\FaceIDApp-main\FaceIDApp-main\faceid.py"
+```
+
+Ensure your code loads those with `self.resource_path(...)`.
+
+---
+
+## ✅ Summary for the New Computer
+
+| Requirement                          | Needed | Notes                      |
+| ------------------------------------ | ------ | -------------------------- |
+| Windows 64-bit                       | ✅      | Same as dev machine        |
+| Visual C++ Redistributable Installed | ✅      | Link provided above        |
+| OpenGL-compatible GPU driver         | ✅      | For Kivy rendering         |
+| Python installed                     | ❌      | Not needed                 |
+| Webcam                               | ✅      | Must be accessible         |
+| Antivirus exceptions (optional)      | ⚠️     | Warn if flagged            |
+| Temp folders and files created       | ✅      | Automate or ship in bundle |
+
+Let me know if you'd like a `first-run setup script`, or want to convert this into a GUI installer (`Inno Setup` or `NSIS`) for a more beginner-friendly installation process.
