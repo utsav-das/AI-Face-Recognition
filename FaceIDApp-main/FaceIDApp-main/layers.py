@@ -3,7 +3,7 @@
 
 # Import dependencies
 import tensorflow as tf
-from tensorflow.python.keras.layers import Layer
+from tensorflow.keras.layers import Layer
 
 # Custom L1 Distance Layer from Jupyter 
 class L1Dist(Layer):
