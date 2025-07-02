@@ -9,6 +9,8 @@ from kivy.uix.label import Label
 
 import cv2
 import os
+import tempfile
+
 
 class FaceCaptureApp(App):
     def build(self):
@@ -31,7 +33,7 @@ class FaceCaptureApp(App):
 
         self.saving = False
         self.save_count = 0
-        self.max_photos = 20
+        self.max_photos = 20  # Set max images to 20
         self.user_folder = ""
 
         return layout
@@ -52,7 +54,7 @@ class FaceCaptureApp(App):
         self.image_widget.texture = texture
 
         if self.saving and self.save_count < self.max_photos:
-            self.save_face(frame)
+            self.save_face(self.frame)
 
     def enhance_image(self, img):
         img_yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
@@ -90,7 +92,9 @@ class FaceCaptureApp(App):
             self.status_label.text = "Please enter a name"
             return
 
-        base_dir = os.path.join(os.path.expanduser("~"), "verification_image")
+        # Save to temp folder: C:\Users\<user>\AppData\Local\Temp\data\verification_image\<USER_NAME>
+        temp_dir = tempfile.gettempdir()
+        base_dir = os.path.join(temp_dir, "data", "verification_image")
         self.user_folder = os.path.join(base_dir, self.user_name)
         os.makedirs(self.user_folder, exist_ok=True)
 
@@ -101,6 +105,7 @@ class FaceCaptureApp(App):
     def on_stop(self):
         if self.capture:
             self.capture.release()
+
 
 if __name__ == '__main__':
     FaceCaptureApp().run()
