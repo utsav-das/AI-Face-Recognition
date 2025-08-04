@@ -1,4 +1,5 @@
-# Refactored Kivy + DeepFace Face Recognition App (optimized for 1000+ faces)
+# faceid.py — Updated with full logger and debug info
+
 import os
 import sys
 import cv2
@@ -60,9 +61,18 @@ def play_beep():
         os.system('printf "\\a"')
 
 def enhance_image(img):
-    yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
-    yuv[:, :, 0] = cv2.equalizeHist(yuv[:, :, 0])
-    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
+    img_yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    img_yuv[:, :, 0] = clahe.apply(img_yuv[:, :, 0])
+    img_output = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
+
+    hsv = cv2.cvtColor(img_output, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    v = cv2.add(v, 25)
+    final_hsv = cv2.merge((h, s, v))
+    img_output = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)
+
+    return img_output
 
 # ---------------------- Main App ----------------------
 class CamApp(App):
@@ -73,7 +83,7 @@ class CamApp(App):
         self.folder = FolderStruct()
         self.SAVE_PATH = os.path.join(self.folder.INPUT_IMG, 'input_image.jpg')
 
-        # --- Loading screen widgets ---
+        # --- Loading screen UI ---
         self.loading_main_label = Label(
             text="[b]Initializing[/b]",
             markup=True,
@@ -110,7 +120,6 @@ class CamApp(App):
         loading_layout.add_widget(self.loading_detail_label)
         loading_layout.add_widget(self.dots_label)
 
-        # Start the repeated initialization steps
         self.init_steps = [
             "Removing old embedding cache...",
             "Copying default config if needed...",
@@ -135,12 +144,8 @@ class CamApp(App):
 
         step_text = self.init_steps[self.current_step]
         self.loading_detail_label.text = step_text
+        self.dots_label.text = "." * ((len(self.dots_label.text) % 3) + 1)
 
-        # Animate dots
-        dots_count = (len(self.dots_label.text) % 3) + 1
-        self.dots_label.text = "." * dots_count
-
-        # Perform step action
         if step_text == "Removing old embedding cache...":
             self.remove_embedding_cache()
         elif step_text == "Copying default config if needed...":
@@ -176,7 +181,6 @@ class CamApp(App):
         if not os.path.exists(script_path):
             logger.error(f"generate_embedding_cache.py not found at {script_path}")
             return
-
         try:
             subprocess.run([sys.executable, script_path], check=True)
             logger.info("Embedding cache generated successfully.")
@@ -186,18 +190,20 @@ class CamApp(App):
     def load_reference_embeddings(self):
         path = os.path.join(self.folder.THRESHOLD, "embedding_cache.npy")
         if os.path.exists(path):
-            logger.info("Loading cached embeddings...")
             self.reference_embeddings = np.load(path, allow_pickle=True).item()
+            logger.info(f"Embedding cache loaded with {len(self.reference_embeddings)} people.")
+            for k in self.reference_embeddings:
+                logger.info(f"Loaded: {k} — shape: {self.reference_embeddings[k].shape}")
         else:
-            logger.warning("Embedding cache not found.")
+            logger.warning("No embedding cache found.")
             self.reference_embeddings = {}
 
     def initialize_camera(self):
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         self.capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        logger.info("Camera initialized.")
 
     def show_main_ui(self):
-        # Main app UI after initialization
         self.web_cam = Image(size_hint=(1, .7))
         self.verification_label = Label(
             text="[size=18]Ready for Detection[/size]",
@@ -217,7 +223,9 @@ class CamApp(App):
         self.root.clear_widgets()
         self.root.add_widget(main_layout)
 
-        self.threshold = self.read_config().getfloat("threshold", "detection_threshold", fallback=0.65)
+        config = self.read_config()
+        self.threshold = config.getfloat("threshold", "detection_threshold", fallback=0.85)
+        logger.info(f"Detection threshold set to: {self.threshold}")
         self.freeze_frame = None
         self.detection_enabled = True
 
@@ -242,7 +250,7 @@ class CamApp(App):
             ret, frame = self.capture.read()
             if not ret:
                 return
-            frame = frame[120:370, 200:450, :]
+            frame = frame[120:370, 200:450, :]  # Adjust if needed
 
         if self.detection_enabled:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -269,6 +277,7 @@ class CamApp(App):
         if len(faces) > 0:
             enhanced = enhance_image(frame)
             cv2.imwrite(self.SAVE_PATH, enhanced)
+            logger.info(f"Face detected — input image saved to: {self.SAVE_PATH}")
             self.freeze_frame = frame.copy()
             self.detection_enabled = False
             self.verification_label.text = "[size=18]Checking...[/size]"
@@ -302,6 +311,7 @@ class CamApp(App):
         for person, embeddings in self.reference_embeddings.items():
             dists = np.linalg.norm(embeddings - input_embedding, axis=1)
             avg_dist = np.mean(dists)
+            logger.info(f"Compared with: {person}, avg_dist: {avg_dist:.4f}")
             if avg_dist < self.threshold and avg_dist < min_dist:
                 min_dist = avg_dist
                 best_match = person
@@ -310,10 +320,10 @@ class CamApp(App):
             name = best_match.replace("_", " ").upper()
             self.verification_label.text = f"[size=18]Welcome[/size]\n[size=24][b]{name}[/b][/size]\n[size=18]Access granted[/size]"
             self.verification_label.color = [0, 1, 0, 1]
-            logger.info(f"Access granted: {name}")
+            logger.info(f"Access granted: {name} (distance={min_dist:.4f})")
         else:
             self.show_denied()
-            logger.info("Access denied")
+            logger.info("Access denied — no match within threshold.")
 
         threading.Thread(target=play_beep, daemon=True).start()
         Clock.schedule_once(lambda dt: self.fade_message(), 10)
