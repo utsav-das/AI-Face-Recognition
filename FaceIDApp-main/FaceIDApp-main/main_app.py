@@ -3,33 +3,53 @@ from kivy.uix.screenmanager import ScreenManager, Screen, FadeTransition
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.clock import Clock
-from kivy.uix.label import Label
 from kivy.core.window import Window
-import importlib
-import threading
+from kivy.uix.widget import Widget
 
 # Adjust screen size (optional)
 Window.size = (360, 640)
+Window.clearcolor = (1, 1, 1, 1)  # white background
+
+# Colors
+DARK_BLUE = (0/255, 51/255, 102/255, 1)  # RGB for dark blue
+WHITE = (1, 1, 1, 1)
 
 # Placeholder screen for home
 class HomeScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
         layout = BoxLayout(orientation='vertical', padding=20, spacing=20)
 
-        btn_faceid = Button(text='Face Recognition', size_hint=(1, 0.2))
-        btn_faceid.bind(on_press=self.goto_faceid)
+        # Spacer to push buttons to vertical center
+        layout.add_widget(Widget(size_hint_y=None, height=100))
 
-        btn_capture = Button(text='New Profile Creation', size_hint=(1, 0.2))
-        btn_capture.bind(on_press=self.goto_capture)
-
-        btn_exit = Button(text='Exit App', size_hint=(1, 0.2))
-        btn_exit.bind(on_press=lambda x: App.get_running_app().stop())
+        btn_faceid = self.create_button('Face Recognition', self.goto_faceid)
+        btn_capture = self.create_button('New Profile Creation', self.goto_capture)
+        btn_exit = self.create_button('Exit App', lambda x: App.get_running_app().stop())
 
         layout.add_widget(btn_faceid)
         layout.add_widget(btn_capture)
         layout.add_widget(btn_exit)
+
+        # Spacer at bottom for balance
+        layout.add_widget(Widget(size_hint_y=None, height=100))
+
         self.add_widget(layout)
+
+    def create_button(self, text, callback):
+        btn = Button(
+            text=text,
+            size_hint=(1, None),
+            height=80,
+            background_normal='',
+            background_color=DARK_BLUE,
+            color=WHITE,
+            font_name='Calibri',
+            font_size='20sp'
+        )
+        btn.bind(on_press=callback)
+        return btn
 
     def goto_faceid(self, instance):
         self.manager.current = 'faceid'
@@ -51,7 +71,15 @@ class FaceIDScreen(Screen):
             self.faceid_app = CamApp()
             self.faceid_app.root = self.faceid_app.build()
 
-            back_btn = Button(text="← Back to Home", size_hint=(1, 0.1))
+            back_btn = Button(
+                text="← Back to Home",
+                size_hint=(1, 0.1),
+                background_normal='',
+                background_color=DARK_BLUE,
+                color=WHITE,
+                font_name='Calibri',
+                font_size='18sp'
+            )
             back_btn.bind(on_press=self.go_home)
 
             layout = BoxLayout(orientation='vertical')
@@ -66,7 +94,7 @@ class FaceIDScreen(Screen):
         self.loaded = False
         self.manager.current = 'home'
 
-# Wrapper for capture face.py
+# Wrapper for capture_face.py
 class CaptureScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -78,7 +106,15 @@ class CaptureScreen(Screen):
             self.capture_app = FaceCaptureApp()
             self.capture_app.root = self.capture_app.build()
 
-            back_btn = Button(text="← Back to Home", size_hint=(1, 0.1))
+            back_btn = Button(
+                text="← Back to Home",
+                size_hint=(1, 0.1),
+                background_normal='',
+                background_color=DARK_BLUE,
+                color=WHITE,
+                font_name='Calibri',
+                font_size='18sp'
+            )
             back_btn.bind(on_press=self.go_home)
 
             layout = BoxLayout(orientation='vertical')

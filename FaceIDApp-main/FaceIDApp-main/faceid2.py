@@ -122,7 +122,7 @@ class CamApp(App):
 
         self.init_steps = [
             "Removing old embedding cache...",
-            "Copying default config if needed...",
+            "Copying threshold config...",
             "Running generate_embedding_cache.py...",
             "Loading embeddings...",
             "Initializing camera...",
@@ -148,8 +148,6 @@ class CamApp(App):
 
         if step_text == "Removing old embedding cache...":
             self.remove_embedding_cache()
-        elif step_text == "Copying default config if needed...":
-            self.copy_defaults()
         elif step_text == "Running generate_embedding_cache.py...":
             self.run_generate_embedding_cache()
         elif step_text == "Loading embeddings...":
@@ -168,13 +166,6 @@ class CamApp(App):
         if os.path.exists(cache_file):
             os.remove(cache_file)
             logger.info("Old embedding cache removed.")
-
-    def copy_defaults(self):
-        config_src = self.resource_path("config.ini")
-        config_dest = os.path.join(self.folder.THRESHOLD, "config.ini")
-        if not os.path.exists(config_dest):
-            shutil.copy(config_src, config_dest)
-            logger.info(f"Copied config.ini to {config_dest}")
 
     def run_generate_embedding_cache(self):
         script_path = os.path.join(os.path.dirname(__file__), "generate_embedding_cache.py")
