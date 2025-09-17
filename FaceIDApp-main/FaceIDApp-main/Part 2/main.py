@@ -13,6 +13,8 @@ import threading
 import subprocess
 import json
 from datetime import datetime
+import configparser
+import pyzbar.pyzbar as pyzbar
 
 import cv2
 import numpy as np
@@ -23,7 +25,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 # ---------------------------
 # Paths and DB initialization
 # ---------------------------
-TMP = tempfile.gettempdir()
+TMP = os.path.join("C:\\")
 DATA_DIR = os.path.join(TMP, "data")
 VERIF_DIR = os.path.join(DATA_DIR, "verification_image")
 INPUT_DIR = os.path.join(DATA_DIR, "input_image")
@@ -157,6 +159,25 @@ def build_embedding_cache(verify_root, model_name="ArcFace"):
         person_dir = os.path.join(verify_root, person)
         if not os.path.isdir(person_dir):
             continue
+
+        # Extract ID from folder name
+        if "_" not in person:
+            logger.warning(f"Skipping folder with unexpected name: {person}")
+            continue
+        id_val = person.split("_")[0]
+
+        # Retrieve ID and Name from profiles.db
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT name,id2 FROM profiles WHERE id = ?", (id_val,))
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            logger.warning(f"No DB record found for ID {id_val}")
+            continue
+        name_val = row[0]
+        id2_val = row[1]
+
         embeddings = []
         for fname in sorted(os.listdir(person_dir)):
             if not fname.lower().endswith((".jpg", ".jpeg", ".png")):
@@ -180,7 +201,12 @@ def build_embedding_cache(verify_root, model_name="ArcFace"):
             except Exception as e:
                 logger.warning(f"Embed failed for {fpath}: {e}")
         if embeddings:
-            cache[person] = np.vstack(embeddings)
+            cache[person] = {
+                "id": id_val,
+                "name": name_val,
+                "id_2": id2_val,
+                "embeddings": np.vstack(embeddings)
+            }
     return cache
 
 # ---------------------------
@@ -235,19 +261,86 @@ class VerifyWorker(QtCore.QThread):
             return
 
         best_match, min_dist = None, float('inf')
+        logger.info(f"Using detection_threshold = {self.threshold}")
         try:
-            for person, embeddings in self.reference_embeddings.items():
+            for person_key, data in self.reference_embeddings.items():
+                embeddings = data["embeddings"]
                 dists = np.linalg.norm(embeddings - input_embedding, axis=1)
                 avg_dist = float(np.mean(dists))
-                logger.info(f"Compared with: {person}, avg_dist: {avg_dist:.4f}")
-                # use avg_dist for selection like original
+                logger.info(f"Compared with: {data['name']} (ID: {data['id']}), avg_dist: {avg_dist:.4f}")
                 if avg_dist < self.threshold and avg_dist < min_dist:
                     min_dist = avg_dist
-                    best_match = person
+                    best_match = data  # or store full data if needed
             self.result_signal.emit(best_match, min_dist)
         except Exception as e:
             logger.error(f"Verification compare failed: {e}")
             self.error_signal.emit(str(e))
+
+class BarcodeWorker(QtCore.QThread):
+    # Signal to emit the processed camera frame
+    frame_updated = QtCore.pyqtSignal(np.ndarray)
+    # Signal to emit when the correct barcode is found
+    barcode_matched = QtCore.pyqtSignal(str)
+    # Signal to emit when the process finishes (matched or timeout)
+    finished_scanning = QtCore.pyqtSignal()
+
+    def __init__(self, capture, expected_id2, timeout=180, parent=None):
+        super().__init__(parent)
+        self.capture = capture
+        self.expected_id2 = expected_id2
+        self.timeout = timeout
+        self._is_running = True
+
+    def run(self):
+        start_time = datetime.now()
+        matched = False
+
+        while self._is_running and (datetime.now() - start_time).seconds < self.timeout:
+            if not self.capture or not self.capture.isOpened():
+                logger.warning("Camera not available in BarcodeWorker.")
+                break
+
+            ret, frame = self.capture.read()
+            if not ret or frame is None or frame.size == 0:
+                continue
+
+            # Convert to grayscale for better barcode detection
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+            # Decode barcodes
+            barcodes = pyzbar.decode(gray_frame)
+            logger.debug(f"Barcodes detected: {len(barcodes)}")  # debug log
+
+            for barcode in barcodes:
+                barcode_data = barcode.data.decode("utf-8")
+                x, y, w, h = barcode.rect
+
+                # Draw green rectangle and barcode text
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                cv2.putText(frame, barcode_data, (x, y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+
+                logger.info(f"Detected barcode: {barcode_data}")
+
+                if barcode_data == self.expected_id2:
+                    logger.info(f"Barcode matched expected: {barcode_data}")
+                    self.barcode_matched.emit(barcode_data)
+                    matched = True
+                    break
+
+            # Emit the frame to the UI (green boxes if detected)
+            self.frame_updated.emit(frame)
+
+            if matched:
+                break
+
+        self.stop()
+        self.finished_scanning.emit()
+        logger.info("Barcode scanning thread finished.")
+
+
+    def stop(self):
+        self._is_running = False
 
 # ---------------------------
 # PyQt GUI
@@ -441,9 +534,12 @@ class CaptureWidget(QtWidgets.QWidget):
             self.status_label.setText(f"❌ Error: failed to insert profile for ID '{id_val}'.")
             return
         base_dir = VERIF_DIR
-        self.user_folder = os.path.join(base_dir, name_val)
+        # Folder name = ID_NAME
+        folder_name = f"{id_val}_{name_val}"
+        logger.info(f"Folder name is: {folder_name}")
+        self.user_folder = os.path.join(base_dir, folder_name)
         os.makedirs(self.user_folder, exist_ok=True)
-        self.file_prefix = f"{name_val}_({id_val})"
+        self.file_prefix = f"{folder_name}"
         self.saving = True
         self.save_count = 0
         self.status_label.setText(f"📷 Capturing photos for {name_val}...")
@@ -460,9 +556,13 @@ class FaceIDWidget(QtWidgets.QWidget):
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         self.reference_embeddings = {}
         self.SAVE_PATH = os.path.join(INPUT_DIR, 'input_image.jpg')
-        self.threshold = 0.85
+        self.threshold = 0.85 # default value, will be overridden by config
         self.freeze_frame = None
         self.detection_enabled = True
+        self.barcode_worker = None # Add this line
+
+        # Load threshold from config
+        self.load_threshold_config()
 
         # UI
         layout = QtWidgets.QVBoxLayout()
@@ -502,6 +602,26 @@ class FaceIDWidget(QtWidgets.QWidget):
         ]
         # start initialization
         QtCore.QTimer.singleShot(100, self.initialize_sequence)
+
+    def load_threshold_config(self):
+        cfg_path = os.path.join(THRESHOLD_DIR, "config.ini")
+        # Create default config if missing
+        if not os.path.exists(cfg_path):
+            os.makedirs(THRESHOLD_DIR, exist_ok=True)
+            with open(cfg_path, "w") as f:
+                f.write("[threshold]\n")
+                f.write("detection_threshold = 0.85\n")
+            logger.info(f"Default config.ini created at {cfg_path}")
+
+        # Read threshold value
+        config = configparser.ConfigParser()
+        config.read(cfg_path)
+        try:
+            self.threshold = float(config["threshold"].get("detection_threshold", "0.85"))
+            logger.info(f"Detection threshold set to {self.threshold} from config")
+        except Exception as e:
+            logger.warning(f"Failed to read threshold from config, using default 0.85: {e}")
+            self.threshold = 0.85
 
     def initialize_sequence(self):
         # run through steps
@@ -657,17 +777,76 @@ class FaceIDWidget(QtWidgets.QWidget):
 
     def on_verify_result(self, best_match, min_dist):
         if best_match:
-            name = best_match.replace("_", " ").upper()
-            self.label_status.setText(f"Welcome\n{name}\nAccess granted")
-            logger.info(f"Access granted: {name} (distance={min_dist:.4f})")
-            self.label_status.setStyleSheet("color: #0f0; font-size: 16px;")
+            id_val = best_match['id']
+            name = best_match['name'].replace("_", " ").upper()
+            self.label_status.setText(f"Welcome\n{name} ({id_val})\nNow show the barcode")
+            self.label_status.setStyleSheet("color: #ff0; font-size: 16px;")
+            logger.info(f"Face matched: {name} (distance={min_dist:.4f}). Awaiting barcode.")
+
+            # Stop the main timers to let the barcode worker control the camera
+            self.update_timer.stop()
+            self.check_timer.stop()
+            self.detection_enabled = False
+
+            # --- Start the Barcode Worker ---
+            self.barcode_worker = BarcodeWorker(self.capture, expected_id2=best_match['id_2'])
+            
+            # Connect signals to slots
+            self.barcode_worker.frame_updated.connect(self.update_barcode_frame)
+            self.barcode_worker.barcode_matched.connect(self.on_barcode_matched)
+            self.barcode_worker.finished_scanning.connect(self.on_barcode_scan_finished)
+            
+            # Start the thread
+            self.barcode_worker.start()
+
         else:
             self.show_denied()
             logger.info("Access denied — no match within threshold.")
-        # beep in background
+            threading.Thread(target=self.play_beep, daemon=True).start()
+            # Reset after 10 seconds
+            QtCore.QTimer.singleShot(10000, self.resume_check)
+    
+    def update_barcode_frame(self, frame):
+        """This slot receives a frame from the worker and updates the image label."""
+        self._set_label_image(self.image_label, frame)
+
+    def on_barcode_matched(self, barcode_data):
+        """
+        This slot is called when the expected barcode is detected.
+        It updates the label, plays a beep, and logs access granted.
+        """
+        # Safely extract the user's name from the label
+        current_text = self.label_status.text()
+        lines = current_text.split('\n')
+
+        # Try to find the line containing the name (skip "Welcome" and empty lines)
+        name_text = ""
+        for line in lines:
+            line = line.strip()
+            if line and line.lower() != "welcome" and "barcode" not in line.lower():
+                name_text = line
+                break
+
+        # Update label with barcode match
+        self.label_status.setText(f"Welcome\n{name_text}\nBARCODE MATCHED")
+        self.label_status.setStyleSheet("color: #0f0; font-size: 16px;")
+
+        # Log access granted
+        logger.info(f"Access granted with barcode: {barcode_data}")
+
+        # Play beep in background
         threading.Thread(target=self.play_beep, daemon=True).start()
-        # fade message after 10 seconds
-        QtCore.QTimer.singleShot(10000, lambda: self.label_status.setText("Ready for Detection"))
+      
+    def on_barcode_scan_finished(self):
+        """This slot cleans up after the barcode worker is done."""
+        logger.info("Barcode scanning finished.")
+        # Re-enable face detection after a delay
+        self.detection_enabled = True
+        self.freeze_frame = None
+        self.update_timer.start(30) # Restart the main camera loop
+        self.check_timer.start(1000)
+        QtCore.QTimer.singleShot(5000, lambda: self.label_status.setText("Ready for Detection"))
+        self.barcode_worker = None
 
     def on_verify_error(self, err):
         logger.error(f"Verify error: {err}")
@@ -708,7 +887,7 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         init_db()
 
-        self.setWindowTitle("AI Face Recognition — PyQt Port")
+        self.setWindowTitle("AI Face Recognition")
         screen = QtWidgets.QApplication.primaryScreen()
         size = screen.size()  # returns QSize(width, height)
         self.resize(size.width(), size.height())
